@@ -24,14 +24,23 @@
 )
 
 ;; Public functions
+(define-public (deposit (amount uint))
+    (begin
+        (map-set balances {user: tx-sender} 
+            (+ (default-to u0 (map-get? balances {user: tx-sender})) amount))
+        (ok true)
+    )
+)
+
 (define-public (add-order (amount uint))
     (let ((order-id (+ (var-get order-counter) u1))
-          (trader tx-sender))
+          (trader tx-sender)
+          (current-balance (default-to u0 (map-get? balances {user: trader}))))
         ;; Check balance
-        (asserts! (>= (default-to u0 (map-get? balances {user: trader})) amount) err-insufficient-balance)
+        (asserts! (>= current-balance amount) err-insufficient-balance)
         
         ;; Lock tokens
-        (map-set balances {user: trader} (- (default-to u0 (map-get? balances {user: trader})) amount))
+        (map-set balances {user: trader} (- current-balance amount))
         
         ;; Create order
         (map-set orders {order-id: order-id} 
@@ -48,12 +57,16 @@
 
 (define-public (fill-order (order-id uint) (fill-amount uint))
     (let ((order (unwrap! (map-get? orders {order-id: order-id}) err-not-found))
-          (taker tx-sender))
+          (taker tx-sender)
+          (taker-balance (default-to u0 (map-get? balances {user: taker}))))
         ;; Verify order is active
         (asserts! (get active order) err-order-filled)
         (asserts! (<= fill-amount (get amount order)) err-order-filled)
+        ;; Verify taker has sufficient balance
+        (asserts! (>= taker-balance fill-amount) err-insufficient-balance)
         
-        ;; Transfer tokens (simplified)
+        ;; Transfer tokens: taker -> maker
+        (map-set balances {user: taker} (- taker-balance fill-amount))
         (map-set balances {user: (get trader order)} 
             (+ (default-to u0 (map-get? balances {user: (get trader order)})) fill-amount))
         
@@ -63,14 +76,6 @@
             (map-set orders {order-id: order-id} 
                 (merge order {amount: new-amount, active: new-active}))
             (ok true))
-    )
-)
-
-(define-public (deposit (amount uint))
-    (begin
-        (map-set balances {user: tx-sender} 
-            (+ (default-to u0 (map-get? balances {user: tx-sender})) amount))
-        (ok true)
     )
 )
 
