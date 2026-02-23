@@ -1,5 +1,5 @@
 ;; simple-orderbook.clar
-;; Minimal working DeFi orderbook
+;; Minimal working DeFi orderbook with enhancements
 
 ;; Constants
 (define-constant err-not-found (err u101))
@@ -79,6 +79,21 @@
     )
 )
 
+(define-public (cancel-order (order-id uint))
+    (let ((order (unwrap! (map-get? orders {order-id: order-id}) err-not-found)))
+        (begin
+            (asserts! (is-eq (get trader order) tx-sender) err-not-found)
+            ;; Refund remaining amount
+            (map-set balances {user: tx-sender} 
+                (+ (default-to u0 (map-get? balances {user: tx-sender})) (get amount order)))
+            ;; Mark order as inactive
+            (map-set orders {order-id: order-id} 
+                (merge order {amount: u0, active: false}))
+            (ok true)
+        )
+    )
+)
+
 ;; Read-only
 (define-read-only (get-order (order-id uint))
     (map-get? orders {order-id: order-id})
@@ -86,4 +101,70 @@
 
 (define-read-only (get-balance (user principal))
     (default-to u0 (map-get? balances {user: user}))
+)
+
+;; Read-only: list active orders with balances
+(define-read-only (get-active-orders-with-balances)
+    (let ((count (var-get order-counter))
+          (result (list)))
+        (define-private (loop id acc)
+            (if (> id count)
+                acc
+                (let ((order (map-get? orders {order-id: id})))
+                    (if (is-some order)
+                        (let ((o (unwrap! order err-not-found))
+                              (balance (default-to u0 (map-get? balances {user: (get trader o)}))))
+                            (if (get active o)
+                                (loop (+ id u1) (cons
+                                    { order-id: id
+                                      trader: (get trader o)
+                                      amount: (get amount o)
+                                      active: true
+                                      trader-balance: balance }
+                                    acc))
+                                (loop (+ id u1) acc)
+                            )
+                        )
+                        (loop (+ id u1) acc)
+                    )
+                )
+            )
+        )
+        (ok (loop u1 (list)))
+    )
+)
+
+;; Read-only: paginated active orders
+(define-read-only (get-active-orders-with-balances-paged (start-id uint) (limit uint))
+  (let ((count (var-get order-counter))
+        (result (list)))
+    ;; Iterate through order IDs from start-id to start-id + limit
+    (begin
+      (define-private (loop id acc remaining)
+        (if (or (> id count) (<= remaining u0))
+            acc
+            (let ((order (map-get? orders {order-id: id})))
+              (if (is-some order)
+                  (let ((o (unwrap! order err-not-found))
+                        (balance (default-to u0 (map-get? balances {user: (get trader o)}))))
+                    (if (get active o)
+                        (loop (+ id u1) (cons
+                          { order-id: id
+                            trader: (get trader o)
+                            amount: (get amount o)
+                            active: true
+                            trader-balance: balance }
+                          acc)
+                          (- remaining u1))
+                        (loop (+ id u1) acc remaining)
+                    )
+                  )
+                  (loop (+ id u1) acc remaining)
+              )
+            )
+        )
+      )
+      (ok (loop start-id (list) limit))
+    )
+  )
 )
